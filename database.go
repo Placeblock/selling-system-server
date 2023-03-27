@@ -30,6 +30,7 @@ func SetupDatabase() {
 	db.AutoMigrate(&PriceData{})
 	db.AutoMigrate(&SellData{})
 	db.AutoMigrate(&Product{})
+	db.AutoMigrate(&EventData{})
 }
 
 type PriceData struct {
@@ -40,6 +41,7 @@ type PriceData struct {
 
 type SellData struct {
 	ProductID uint      `json:"product_id"`
+	Price     uint      `json:"price"`
 	CreatedAt time.Time `json:"created_at"`
 }
 
@@ -47,8 +49,14 @@ type Product struct {
 	ID         uint        `json:"id"`
 	Name       string      `json:"name"`
 	StartPrice uint        `json:"start_price"`
+	Stock      uint        `json:"stock"`
 	SellData   []SellData  `json:"sell_data" gorm:"constraint:OnDelete:CASCADE;"`
 	PriceData  []PriceData `json:"price_data" gorm:"constraint:OnDelete:CASCADE;"`
+}
+
+type EventData struct {
+	Start time.Time `json:"event_start"`
+	End   time.Time `json:"event_end"`
 }
 
 func GetProducts(db *gorm.DB, from time.Time, to time.Time) ([]Product, error) {
@@ -75,6 +83,13 @@ func SetNewPrice(db *gorm.DB, id uint, price uint) error {
 	priceData := PriceData{ProductID: id, Price: price}
 	err := db.Create(&priceData).Error
 	return err
+}
+
+func GetEventData(db *gorm.DB) (EventData, error) {
+	var eventData EventData
+	fmt.Println("GET EVENT DATA")
+	err := db.First(&eventData).Error
+	return eventData, err
 }
 
 func CloseDB() {

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"math"
@@ -9,6 +10,8 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/procyon-projects/chrono"
+	"gorm.io/gorm"
 )
 
 func init() {
@@ -23,80 +26,85 @@ func main() {
 	routersInit := InitRouter()
 	endPoint := fmt.Sprintf(":%d", ServerSetting.HttpPort)
 
-	go updatePricesTask()
-	go sellProductTask()
-
 	server := &http.Server{
 		Addr:    endPoint,
 		Handler: routersInit,
 	}
 
+	eventData, eventDataErr := GetEventData(db)
+	if eventDataErr == gorm.ErrRecordNotFound {
+		log.Fatal("NO EVENT WAS FOUND!!!")
+		return
+	} else if eventDataErr != nil {
+		log.Fatal(eventDataErr)
+	}
+	fmt.Println("EventStart: " + fmt.Sprint(eventData.Start))
+	fmt.Println("EventEnd: " + fmt.Sprint(eventData.End))
+
+	taskScheduler := chrono.NewDefaultTaskScheduler()
+	if eventData.Start.After(time.Now()) {
+		_, schedulerErr := taskScheduler.Schedule(func(ctx context.Context) {
+			fmt.Println("Starting Event")
+			updatePricesTask(taskScheduler, eventData)
+		}, chrono.WithTime(eventData.Start))
+		if schedulerErr == nil {
+			log.Print("Start Event Task has been scheduled successfully.")
+		} else {
+			log.Fatal(schedulerErr)
+		}
+	} else {
+		updatePricesTask(taskScheduler, eventData)
+	}
+
 	log.Printf("Start http server on Port %s", endPoint)
 
 	err := server.ListenAndServe()
-	log.Println(err)
+	log.Fatal(err)
 }
 
-func updatePricesTask() {
-	frequency := 30 * time.Second
-	ticker := time.NewTicker(frequency)
-	for range ticker.C {
-		updatePrices(frequency)
+func updatePricesTask(taskScheduler chrono.TaskScheduler, eventData EventData) {
+	frequency := 10 * time.Second
+	priceTask, priceTaskErr := taskScheduler.ScheduleAtFixedRate(func(ctx context.Context) {
+		updatePrices(frequency, eventData)
+	}, frequency)
+	if priceTaskErr == nil {
+		log.Print("Price Udpate Task started successfuly.")
+	} else {
+		log.Fatal(priceTaskErr)
+	}
+	_, schedulerErr := taskScheduler.Schedule(func(ctx context.Context) {
+		log.Println("Updating Prices Task Finished")
+		priceTask.Cancel()
+	}, chrono.WithTime(eventData.End))
+	if schedulerErr == nil {
+		log.Println("Price Task Cancel Task started successfuly.")
+	} else {
+		log.Fatal(schedulerErr)
 	}
 }
 
-func updatePrices(frequency time.Duration) {
-	lastTime := time.Now().Add(-frequency)
-	beforeLastTime := time.Now().Add((-frequency) * 2)
-	lastProducts, _ := GetProducts(db, lastTime, time.Now())
-	beforeLastProducts, _ := GetProducts(db, beforeLastTime, lastTime)
+func updatePrices(frequency time.Duration, eventData EventData) {
+	log.Println("Updating Prices")
+	products, _ := GetProducts(db, eventData.Start, eventData.End)
 
-	// CALCULATE GLOBAL DATA
-	//productCount := len(lastProducts)
-	var sells uint = 0
-	for _, s := range lastProducts {
-		lastSells := len(s.SellData)
-		sells = sells + uint(lastSells)
+	fmt.Println("Event End: " + fmt.Sprint(eventData.End))
+	eventDuration := eventData.End.Sub(eventData.Start)
+	elapsedEventTime := time.Now().Sub(eventData.Start)
+	elapsedFactor := float32(elapsedEventTime.Milliseconds()) / float32(eventDuration.Milliseconds())
+	for _, product := range products {
+		lastPrice := product.StartPrice
+		if len(product.PriceData) > 0 {
+			lastPrice = product.PriceData[len(product.PriceData)-1].Price
+		}
+		desiredSells := uint(float32(product.Stock) * elapsedFactor)
+		fmt.Println("Desired Sells: " + fmt.Sprint(desiredSells))
+		sells := uint(len(product.SellData))
+		priceDelta := (int(sells) - int(desiredSells))
+		fmt.Println("Price Delta: " + fmt.Sprint(priceDelta))
+		fmt.Println("Last Price: " + fmt.Sprint(lastPrice))
+
+		SetNewPrice(db, product.ID, uint(math.Max(0, float64(lastPrice)+float64(priceDelta))))
 	}
-	for _, s := range lastProducts {
-		blProduct := getProductFromList(beforeLastProducts, s.ID)
-		if blProduct == nil {
-			continue
-		}
-		productSells := uint(len(s.SellData))
-		lastProductSells := uint(len(blProduct.SellData))
-		/*sellPercentage := float32(0)
-		if sells != 0 {
-			sellPercentage = float32(productSells) / float32(sells)
-		}
-		sellPercentageP := sellPercentage * float32(productCount)*/
-		sellChange := float32(0)
-		if lastProductSells != 0 {
-			sellChange = float32(productSells) / float32(lastProductSells)
-		} else {
-			sellChange = 1
-		}
-		fmt.Println("SellChange " + s.Name + ": " + fmt.Sprint(sellChange))
-		/*sellChangeFactor := calculateInfluence(sellChange, 4)
-		otherProductsFactor := float32(0)
-		if sellPercentageP > 1 {
-			otherProductsFactor = calculateInfluence(sellPercentageP, 4)
-		} else {
-			otherProductsFactor = 1
-		}*/
-
-		newPrice := s.StartPrice
-		if len(s.PriceData) > 0 {
-			newPrice = s.PriceData[len(s.PriceData)-1].Price
-		}
-		deltaPrice := (sellChange - 1) * 30
-		newPrice = uint(math.Max(float64(0), float64(newPrice)+float64(deltaPrice)))
-		SetNewPrice(db, s.ID, newPrice)
-	}
-}
-
-func calculateInfluence(factor float32, multiplier float32) float32 {
-	return factor/multiplier + 1 - 1/multiplier
 }
 
 func getProductFromList(products []Product, id uint) *Product {
@@ -120,28 +128,4 @@ func getFirstSell(products []Product) *time.Time {
 		}
 	}
 	return firstSell
-}
-
-func sellProductTask() {
-
-	ticker := time.NewTicker(1 * time.Second)
-	for range ticker.C {
-		now := time.Now().UnixMilli() / 1000 / 60
-		fmt.Println(now)
-		product1 := int(math.Sin(float64(now)*float64(0.25))*5 + 5)
-		product2 := int(math.Sin((float64(now)+4*math.Pi)*float64(0.25))*5 + 5)
-		fmt.Println("1: " + fmt.Sprint(product1))
-		fmt.Println("2: " + fmt.Sprint(product2))
-		probabilities := make([]uint, product1+product2)
-		for i := 0; i < product1; i++ {
-			probabilities[i] = 1
-		}
-		for i := product1; i < product1+product2; i++ {
-			probabilities[i] = 2
-		}
-
-		sellProduct := probabilities[rand.Intn(len(probabilities))]
-		fmt.Println("Selling Product: " + fmt.Sprint(sellProduct))
-		SellProduct(db, sellProduct)
-	}
 }
