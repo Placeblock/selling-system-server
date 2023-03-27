@@ -52,44 +52,46 @@ func updatePrices(frequency time.Duration) {
 	beforeLastProducts, _ := GetProducts(db, beforeLastTime, lastTime)
 
 	// CALCULATE GLOBAL DATA
-	productCount := len(lastProducts)
+	//productCount := len(lastProducts)
 	var sells uint = 0
 	for _, s := range lastProducts {
 		lastSells := len(s.SellData)
 		sells = sells + uint(lastSells)
 	}
-	fmt.Println("All Sells: " + fmt.Sprint(sells))
 	for _, s := range lastProducts {
 		blProduct := getProductFromList(beforeLastProducts, s.ID)
 		if blProduct == nil {
 			continue
 		}
 		productSells := uint(len(s.SellData))
-		fmt.Println("Sells of " + s.Name + ": " + fmt.Sprint(productSells))
 		lastProductSells := uint(len(blProduct.SellData))
-		fmt.Println("Last Sells of " + s.Name + ": " + fmt.Sprint(lastProductSells))
-		sellPercentage := float32(0)
+		/*sellPercentage := float32(0)
 		if sells != 0 {
 			sellPercentage = float32(productSells) / float32(sells)
 		}
-		sellPercentageP := sellPercentage * float32(productCount)
+		sellPercentageP := sellPercentage * float32(productCount)*/
 		sellChange := float32(0)
 		if lastProductSells != 0 {
 			sellChange = float32(productSells) / float32(lastProductSells)
 		} else {
 			sellChange = 1
 		}
-		sellChangeFactor := calculateInfluence(sellChange, 4)
+		fmt.Println("SellChange " + s.Name + ": " + fmt.Sprint(sellChange))
+		/*sellChangeFactor := calculateInfluence(sellChange, 4)
 		otherProductsFactor := float32(0)
 		if sellPercentageP > 1 {
 			otherProductsFactor = calculateInfluence(sellPercentageP, 4)
 		} else {
 			otherProductsFactor = 1
-		}
+		}*/
 
-		newPrice := uint(float32(s.StartPrice) * sellChangeFactor * otherProductsFactor)
+		newPrice := s.StartPrice
+		if len(s.PriceData) > 0 {
+			newPrice = s.PriceData[len(s.PriceData)-1].Price
+		}
+		deltaPrice := (sellChange - 1) * 30
+		newPrice = uint(math.Max(float64(0), float64(newPrice)+float64(deltaPrice)))
 		SetNewPrice(db, s.ID, newPrice)
-		fmt.Println("New Price for Product: " + s.Name + ": " + fmt.Sprint(newPrice))
 	}
 }
 
@@ -124,7 +126,7 @@ func sellProductTask() {
 
 	ticker := time.NewTicker(1 * time.Second)
 	for range ticker.C {
-		now := time.Now().UnixMilli() / 1000 / 120
+		now := time.Now().UnixMilli() / 1000 / 60
 		fmt.Println(now)
 		product1 := int(math.Sin(float64(now)*float64(0.25))*5 + 5)
 		product2 := int(math.Sin((float64(now)+4*math.Pi)*float64(0.25))*5 + 5)
