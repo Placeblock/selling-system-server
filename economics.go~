@@ -104,8 +104,7 @@ func updatePrices(frequency time.Duration, eventData EventData) {
 		fmt.Println("Price Delta: " + fmt.Sprint(priceDelta))
 		fmt.Println("Last Price: " + fmt.Sprint(lastPrice))
 
-		SetNewPrice(db, product.ID, float32(math.Min(500,
-math.Max(80, float64(lastPrice)+priceDelta))), now)
+		SetNewPrice(db, product.ID, float32(math.Max(60, float64(lastPrice)+priceDelta)), now)
 	}
 }
 
